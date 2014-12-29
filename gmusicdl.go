@@ -25,7 +25,7 @@ var config struct {
 }
 
 func main() {
-	if err := readConfig(); err == nil {
+	if err := readConfig(); err != nil {
 		log.Fatalln("Error reading config:", err)
 	}
 
