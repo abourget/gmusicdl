@@ -160,7 +160,6 @@ func (gm *GoogleMusic) launchDownload(info *gpm.Track) (string, error) {
 }
 
 func (gm *GoogleMusic) writeID3(track *gpm.Track, filename string) error {
-	log.Printf("BOoo, %#v\n", track)
 	args := []string{
 		filename,
 		"--album", track.Album,
