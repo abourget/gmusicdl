@@ -1,25 +1,35 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
-
-	"code.google.com/p/gopass"
 
 	"github.com/amir/gpm"
 	"github.com/atotto/clipboard"
 )
 
-func main() {
-	pw, _ := gopass.GetPass("Enter password: ")
+var config struct {
+	Email     string
+	Password  string
+	OutputDir string `json:"output_dir"`
+	DeviceID  string `json:"device_id"` // Valid Android Device ID, 16 chrs hex
+}
 
-	client := NewGoogleMusic("bourget.alexandre@gmail.com", pw)
+func main() {
+	if err := readConfig(); err == nil {
+		log.Fatalln("Error reading config:", err)
+	}
+
+	client := NewGoogleMusic(config.Email, config.Password)
 	log.Println("Logging in...")
 	err := client.Login()
 	if err != nil {
@@ -30,7 +40,6 @@ func main() {
 
 	log.Println("Listening for xclip...")
 	initialWait := 0
-	downloadList := make(chan string, 50)
 	go client.manageDownloads()
 
 	for {
@@ -49,9 +58,23 @@ func main() {
 			}
 			client.seenList[trackID] = true
 			log.Println("Pushing track for download", trackID)
-			downloadList <- trackID
+			client.trackIDch <- trackID
 		}
 	}
+}
+
+func readConfig() (err error) {
+	cnt, err := ioutil.ReadFile("gmusicdl.conf")
+	if err != nil {
+		return
+	}
+
+	err = json.Unmarshal(cnt, &config)
+	if err != nil {
+		return
+	}
+
+	return nil
 }
 
 type GoogleMusic struct {
@@ -70,6 +93,7 @@ func NewGoogleMusic(login, pass string) *GoogleMusic {
 
 func (gm *GoogleMusic) manageDownloads() {
 	for {
+		log.Println("Waiting for next track...")
 		trackID := <-gm.trackIDch
 		info := gm.fetchTrackInfo(trackID)
 		if info == nil {
@@ -103,12 +127,11 @@ func (gm *GoogleMusic) fetchTrackInfo(trackID string) *gpm.Track {
 	return &info
 }
 func (gm *GoogleMusic) launchDownload(info *gpm.Track) (string, error) {
-
-	filename := fmt.Sprintf("/home/abourget/Musique/%s - %s - %s.mp3", info.Title, info.Artist, info.Album)
+	filename := path.Join(config.OutputDir, fmt.Sprintf("%s - %s - %s.mp3", info.Title, info.Artist, info.Album))
 	log.Println("Launching dl for", filename)
 
 	log.Println("- getting link")
-	mp3Url, err := gm.MP3StreamURL(info.Nid, "3e4e2ed2cd90976f")
+	mp3Url, err := gm.MP3StreamURL(info.Nid, config.DeviceID)
 	if err != nil {
 		return "", fmt.Errorf("MP3StreamURL error: %s", err)
 	}
@@ -137,7 +160,21 @@ func (gm *GoogleMusic) launchDownload(info *gpm.Track) (string, error) {
 }
 
 func (gm *GoogleMusic) writeID3(track *gpm.Track, filename string) error {
-	cmd := exec.Command("id3v2", filename, "--album", track.Album, "--artist", track.Artist, "--song", track.Title)
+	log.Printf("BOoo, %#v\n", track)
+	args := []string{
+		filename,
+		"--album", track.Album,
+		"--artist", track.Artist,
+		"--song", track.Title,
+	}
+	if track.Year != 0 {
+		args = append(args, "--year", fmt.Sprintf("%d", track.Year))
+	}
+	if track.TrackNumber != 0 {
+		args = append(args, "--track", fmt.Sprintf("%02d", track.TrackNumber))
+	}
+
+	cmd := exec.Command("id3v2", args...)
 	log.Println("Writing ID3 tags")
 	_, err := cmd.Output()
 	if err != nil {
